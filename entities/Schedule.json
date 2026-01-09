@@ -1,0 +1,51 @@
+{
+  "name": "Schedule",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Name of the saved schedule"
+    },
+    "day_of_week": {
+      "type": "string",
+      "enum": [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday"
+      ],
+      "description": "Day of the week for this schedule"
+    },
+    "entries": {
+      "type": "array",
+      "description": "List of instructor entries with their time slots",
+      "items": {
+        "type": "object",
+        "properties": {
+          "instructor_id": {
+            "type": "string"
+          },
+          "instructor_name": {
+            "type": "string"
+          },
+          "instructor_image": {
+            "type": "string"
+          },
+          "time_slots": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "name",
+    "day_of_week"
+  ]
+}
