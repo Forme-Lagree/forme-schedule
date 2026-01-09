@@ -1,0 +1,22 @@
+{
+  "name": "Instructor",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Instructor's display name"
+    },
+    "profile_image": {
+      "type": "string",
+      "description": "URL to the instructor's profile image"
+    },
+    "is_active": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether the instructor is currently active"
+    }
+  },
+  "required": [
+    "name"
+  ]
+}
