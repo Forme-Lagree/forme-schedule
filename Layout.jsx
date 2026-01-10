@@ -1,11 +1,13 @@
 import React from 'react';
-import { Calendar, Users, Palette } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { createPageUrl } from './utils';
+import { Calendar, Users, Palette, Home } from 'lucide-react';
 
 export default function Layout({ children, currentPageName }) {
   const navItems = [
-    { name: 'ScheduleBuilder', label: 'Builder', icon: Calendar, path: '/' },
-    { name: 'AdminDashboard', label: 'Instructors', icon: Users, path: '/AdminDashboard' },
-    { name: 'Settings', label: 'Themes', icon: Palette, path: '/Settings' },
+    { name: 'ScheduleBuilder', label: 'Builder', icon: Calendar },
+    { name: 'AdminDashboard', label: 'Instructors', icon: Users },
+    { name: 'Settings', label: 'Themes', icon: Palette },
   ];
 
   return (
@@ -24,8 +26,8 @@ export default function Layout({ children, currentPageName }) {
         <div className="max-w-6xl mx-auto px-4">
           <div className="flex items-center justify-between h-16">
             {/* Logo */}
-            <a 
-              href="/"
+            <Link 
+              to={createPageUrl('ScheduleBuilder')}
               className="flex items-center gap-2 text-white"
             >
               <span 
@@ -34,7 +36,7 @@ export default function Layout({ children, currentPageName }) {
               >
                 FORME L'AGREE
               </span>
-            </a>
+            </Link>
 
             {/* Nav Items */}
             <div className="flex items-center gap-1">
@@ -43,9 +45,9 @@ export default function Layout({ children, currentPageName }) {
                 const isActive = currentPageName === item.name;
                 
                 return (
-                  <a
+                  <Link
                     key={item.name}
-                    href={item.path}
+                    to={createPageUrl(item.name)}
                     className={`
                       flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-sm font-medium
                       ${isActive 
@@ -56,7 +58,7 @@ export default function Layout({ children, currentPageName }) {
                   >
                     <Icon className="w-4 h-4" />
                     <span className="hidden sm:inline">{item.label}</span>
-                  </a>
+                  </Link>
                 );
               })}
             </div>
