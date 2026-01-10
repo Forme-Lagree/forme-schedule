@@ -1,317 +1,332 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { base44 } from '@/api/base44Client';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Upload, User, X, Check, ImageIcon } from 'lucide-react';
+import html2canvas from 'html2canvas';
+import { Plus, Download, RefreshCw, Save, FolderOpen } from 'lucide-react';
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import StoryCanvas from '@/components/schedule/StoryCanvas';
+import InstructorBlock from '@/components/schedule/InstructorBlock';
 
-export default function AdminDashboard() {
+const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+export default function ScheduleBuilder() {
   const queryClient = useQueryClient();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [editingInstructor, setEditingInstructor] = useState(null);
-  const [instructorToDelete, setInstructorToDelete] = useState(null);
-  const [name, setName] = useState('');
-  const [imageUrl, setImageUrl] = useState('');
-  const [uploading, setUploading] = useState(false);
+  const canvasRef = useRef(null);
+  
+  const [day, setDay] = useState('Sunday');
+  const [blocks, setBlocks] = useState([{ id: Date.now(), instructorId: '', times: [] }]);
+  const [scheduleName, setScheduleName] = useState('');
+  const [saveDialogOpen, setSaveDialogOpen] = useState(false);
+  const [loadDialogOpen, setLoadDialogOpen] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
-  const { data: instructors = [], isLoading } = useQuery({
+  // Fetch instructors
+  const { data: instructors = [] } = useQuery({
     queryKey: ['instructors'],
-    queryFn: () => base44.entities.Instructor.list('name'),
+    queryFn: () => base44.entities.Instructor.list(),
   });
 
-  const createMutation = useMutation({
-    mutationFn: (data) => base44.entities.Instructor.create(data),
+  // Fetch background setting
+  const { data: settings = [] } = useQuery({
+    queryKey: ['appSettings'],
+    queryFn: () => base44.entities.AppSettings.list(),
+  });
+
+  // Fetch saved schedules
+  const { data: savedSchedules = [] } = useQuery({
+    queryKey: ['schedules'],
+    queryFn: () => base44.entities.Schedule.list('-created_date'),
+  });
+
+  const backgroundUrl = settings.find(s => s.setting_key === 'background_image')?.setting_value || '';
+
+  // Save schedule mutation
+  const saveMutation = useMutation({
+    mutationFn: (data) => base44.entities.Schedule.create(data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instructors'] });
-      toast.success('Instructor added');
-      closeDialog();
+      queryClient.invalidateQueries({ queryKey: ['schedules'] });
+      toast.success('Schedule saved successfully');
+      setSaveDialogOpen(false);
+      setScheduleName('');
     },
   });
 
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }) => base44.entities.Instructor.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instructors'] });
-      toast.success('Instructor updated');
-      closeDialog();
-    },
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (id) => base44.entities.Instructor.delete(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['instructors'] });
-      toast.success('Instructor deleted');
-      setDeleteDialogOpen(false);
-      setInstructorToDelete(null);
-    },
-  });
-
-  const openAddDialog = () => {
-    setEditingInstructor(null);
-    setName('');
-    setImageUrl('');
-    setDialogOpen(true);
+  const addBlock = () => {
+    setBlocks([...blocks, { id: Date.now(), instructorId: '', times: [] }]);
   };
 
-  const openEditDialog = (instructor) => {
-    setEditingInstructor(instructor);
-    setName(instructor.name);
-    setImageUrl(instructor.profile_image || '');
-    setDialogOpen(true);
+  const removeBlock = (id) => {
+    if (blocks.length > 1) {
+      setBlocks(blocks.filter(b => b.id !== id));
+    }
   };
 
-  const closeDialog = () => {
-    setDialogOpen(false);
-    setEditingInstructor(null);
-    setName('');
-    setImageUrl('');
+  const updateBlock = (id, field, value) => {
+    setBlocks(blocks.map(b => b.id === id ? { ...b, [field]: value } : b));
   };
 
-  const handleFileUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const toggleTime = (blockId, time) => {
+    setBlocks(blocks.map(b => {
+      if (b.id !== blockId) return b;
+      const times = b.times.includes(time) 
+        ? b.times.filter(t => t !== time)
+        : [...b.times, time];
+      return { ...b, times };
+    }));
+  };
 
-    setUploading(true);
+  // Build entries for canvas
+  const entries = blocks
+    .filter(b => b.instructorId && b.times.length > 0)
+    .map(b => {
+      const inst = instructors.find(i => i.id === b.instructorId);
+      return {
+        instructor_id: b.instructorId,
+        instructor_name: inst?.name || '',
+        instructor_image: inst?.profile_image || '',
+        time_slots: b.times
+      };
+    });
+
+  const compressed = entries.length >= 4;
+
+  const handleDownload = async () => {
+    if (!canvasRef.current) return;
+    setIsDownloading(true);
+    
+    const canvas = canvasRef.current;
+    const originalTransform = canvas.style.transform;
+    canvas.style.transform = 'scale(1)';
+
     try {
-      const { file_url } = await base44.integrations.Core.UploadFile({ file });
-      setImageUrl(file_url);
-      toast.success('Image uploaded');
+      const output = await html2canvas(canvas, {
+        useCORS: true,
+        allowTaint: true,
+        scale: 1.5
+      });
+
+      const link = document.createElement('a');
+      link.download = `Forme-Schedule-${day}.png`;
+      link.href = output.toDataURL();
+      link.click();
+      toast.success('Image downloaded!');
     } catch (error) {
-      toast.error('Upload failed');
+      toast.error('Download failed. Please try again.');
     } finally {
-      setUploading(false);
+      canvas.style.transform = originalTransform;
+      setIsDownloading(false);
     }
   };
 
   const handleSave = () => {
-    if (!name.trim()) {
-      toast.error('Please enter a name');
+    if (!scheduleName.trim()) {
+      toast.error('Please enter a schedule name');
       return;
     }
 
-    const data = {
-      name: name.trim(),
-      profile_image: imageUrl,
-      is_active: true
-    };
-
-    if (editingInstructor) {
-      updateMutation.mutate({ id: editingInstructor.id, data });
-    } else {
-      createMutation.mutate(data);
-    }
+    saveMutation.mutate({
+      name: scheduleName,
+      day_of_week: day,
+      entries: entries
+    });
   };
 
-  const confirmDelete = (instructor) => {
-    setInstructorToDelete(instructor);
-    setDeleteDialogOpen(true);
+  const handleLoad = (schedule) => {
+    setDay(schedule.day_of_week);
+    setBlocks(
+      schedule.entries?.map((e, i) => ({
+        id: Date.now() + i,
+        instructorId: e.instructor_id,
+        times: e.time_slots || []
+      })) || [{ id: Date.now(), instructorId: '', times: [] }]
+    );
+    setLoadDialogOpen(false);
+    toast.success('Schedule loaded');
   };
 
   return (
-    <div className="min-h-screen bg-[#111] text-white p-6">
-      <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&display=swap" rel="stylesheet" />
+    <div className="min-h-screen bg-[#111] text-white flex flex-col items-center p-5">
+      <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&family=Montserrat:wght@300;400&display=swap" rel="stylesheet" />
       
-      <div className="max-w-4xl mx-auto">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-8">
+      {/* Admin Panel */}
+      <div className="w-full max-w-[720px] mb-6 p-6 rounded-2xl relative overflow-hidden"
+        style={{
+          background: 'rgba(255, 255, 255, 0.06)',
+          border: '1px solid rgba(255, 255, 255, 0.14)',
+          boxShadow: '0 18px 60px rgba(0, 0, 0, 0.45)',
+          backdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: 'blur(14px)'
+        }}
+      >
+        {/* Gradient overlay */}
+        <div className="absolute inset-0 rounded-2xl pointer-events-none"
+          style={{
+            background: 'radial-gradient(1200px 400px at 20% 0%, rgba(255,255,255,0.10), transparent 60%)',
+            opacity: 0.9
+          }}
+        />
+
+        {/* Top Row */}
+        <div className="relative z-10 flex gap-3 items-center justify-between mb-4">
           <div>
-            <h1 className="text-3xl font-light tracking-wider" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-              Instructor Management
-            </h1>
-            <p className="text-white/60 text-sm mt-1">Add, edit, or remove instructors</p>
+            <p className="text-lg tracking-wider opacity-95 m-0" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
+              Schedule Builder
+            </p>
+            <p className="text-xs tracking-wide opacity-70 mt-0.5">
+              Admin-only controls (export-ready)
+            </p>
           </div>
-          <Button 
-            onClick={openAddDialog}
-            className="bg-emerald-600 hover:bg-emerald-700 rounded-xl"
+          <div className="w-44">
+            <Select value={day} onValueChange={setDay}>
+              <SelectTrigger className="bg-white/[0.07] border-white/16 text-white rounded-xl">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DAYS.map(d => (
+                  <SelectItem key={d} value={d}>{d}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {/* Builder Container */}
+        <div className="relative z-10 flex flex-col gap-3 mb-4">
+          {blocks.map(block => (
+            <InstructorBlock
+              key={block.id}
+              instructors={instructors}
+              selectedInstructor={block.instructorId}
+              selectedTimes={block.times}
+              onInstructorChange={(val) => updateBlock(block.id, 'instructorId', val)}
+              onTimeToggle={(time) => toggleTime(block.id, time)}
+              onRemove={() => removeBlock(block.id)}
+            />
+          ))}
+        </div>
+
+        {/* Actions */}
+        <div className="relative z-10 grid grid-cols-1 gap-2.5">
+          <Button
+            variant="outline"
+            onClick={addBlock}
+            className="w-full py-3 rounded-xl border-white/14 bg-white/[0.08] text-white font-bold tracking-wide hover:bg-white/10"
           >
             <Plus className="w-4 h-4 mr-2" />
             Add Instructor
           </Button>
-        </div>
-
-        {/* Instructor Grid */}
-        {isLoading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[1, 2, 3].map(i => (
-              <div key={i} className="h-64 rounded-2xl bg-white/5 animate-pulse" />
-            ))}
-          </div>
-        ) : instructors.length === 0 ? (
-          <div className="text-center py-20">
-            <User className="w-16 h-16 mx-auto mb-4 text-white/20" />
-            <p className="text-white/60">No instructors yet</p>
-            <Button onClick={openAddDialog} className="mt-4 bg-white/10 hover:bg-white/20">
-              Add your first instructor
-            </Button>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {instructors.map(instructor => (
-              <div 
-                key={instructor.id}
-                className="group relative rounded-2xl overflow-hidden"
-                style={{
-                  background: 'rgba(255, 255, 255, 0.06)',
-                  border: '1px solid rgba(255, 255, 255, 0.14)',
-                  backdropFilter: 'blur(14px)'
-                }}
-              >
-                <div className="aspect-square relative">
-                  {instructor.profile_image ? (
-                    <img 
-                      src={instructor.profile_image} 
-                      alt={instructor.name}
-                      className="w-full h-full object-cover"
-                    />
+          
+          <div className="grid grid-cols-2 gap-2.5">
+            <Dialog open={loadDialogOpen} onOpenChange={setLoadDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="w-full py-3 rounded-xl border-white/14 bg-white/[0.08] text-white font-bold tracking-wide hover:bg-white/10"
+                >
+                  <FolderOpen className="w-4 h-4 mr-2" />
+                  Load
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="bg-[#1a1a1a] border-white/20 text-white">
+                <DialogHeader>
+                  <DialogTitle>Load Saved Schedule</DialogTitle>
+                </DialogHeader>
+                <div className="max-h-80 overflow-y-auto space-y-2">
+                  {savedSchedules.length === 0 ? (
+                    <p className="text-white/60 text-center py-4">No saved schedules</p>
                   ) : (
-                    <div className="w-full h-full flex items-center justify-center bg-white/5">
-                      <User className="w-20 h-20 text-white/20" />
-                    </div>
+                    savedSchedules.map(schedule => (
+                      <button
+                        key={schedule.id}
+                        onClick={() => handleLoad(schedule)}
+                        className="w-full p-3 rounded-lg bg-white/5 hover:bg-white/10 text-left transition-all"
+                      >
+                        <p className="font-medium">{schedule.name}</p>
+                        <p className="text-sm text-white/60">{schedule.day_of_week} • {schedule.entries?.length || 0} instructors</p>
+                      </button>
+                    ))
                   )}
-                  
-                  {/* Overlay on hover */}
-                  <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      onClick={() => openEditDialog(instructor)}
-                      className="rounded-full border-white/30 bg-white/10 hover:bg-white/20"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      onClick={() => confirmDelete(instructor)}
-                      className="rounded-full border-red-400/50 bg-red-500/20 hover:bg-red-500/40 text-red-400"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  </div>
                 </div>
-                
-                <div className="p-4">
-                  <h3 className="text-lg font-medium tracking-wide" style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-                    {instructor.name}
-                  </h3>
+              </DialogContent>
+            </Dialog>
+
+            <Dialog open={saveDialogOpen} onOpenChange={setSaveDialogOpen}>
+              <DialogTrigger asChild>
+                <Button
+                  variant="outline"
+                  className="w-full py-3 rounded-xl border-white/14 bg-white/[0.08] text-white font-bold tracking-wide hover:bg-white/10"
+                >
+                  <Save className="w-4 h-4 mr-2" />
+                  Save
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="bg-[#1a1a1a] border-white/20 text-white">
+                <DialogHeader>
+                  <DialogTitle>Save Schedule</DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  <Input
+                    placeholder="Schedule name"
+                    value={scheduleName}
+                    onChange={(e) => setScheduleName(e.target.value)}
+                    className="bg-white/10 border-white/20 text-white"
+                  />
+                  <Button 
+                    onClick={handleSave} 
+                    disabled={saveMutation.isPending}
+                    className="w-full bg-emerald-600 hover:bg-emerald-700"
+                  >
+                    {saveMutation.isPending ? 'Saving...' : 'Save Schedule'}
+                  </Button>
                 </div>
-              </div>
-            ))}
+              </DialogContent>
+            </Dialog>
           </div>
-        )}
+
+          <Button
+            onClick={handleDownload}
+            disabled={isDownloading || entries.length === 0}
+            className="w-full py-3 rounded-xl bg-white text-black font-bold tracking-wide text-base hover:bg-white/90"
+          >
+            {isDownloading ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                Processing...
+              </>
+            ) : (
+              <>
+                <Download className="w-4 h-4 mr-2" />
+                Download Image
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
-      {/* Add/Edit Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="bg-[#1a1a1a] border-white/20 text-white max-w-md">
-          <DialogHeader>
-            <DialogTitle style={{ fontFamily: "'Cormorant Garamond', serif" }}>
-              {editingInstructor ? 'Edit Instructor' : 'Add Instructor'}
-            </DialogTitle>
-          </DialogHeader>
-          
-          <div className="space-y-6 pt-4">
-            {/* Image Preview/Upload */}
-            <div className="flex flex-col items-center">
-              <div className="w-32 h-32 rounded-full overflow-hidden bg-white/5 relative group">
-                {imageUrl ? (
-                  <img src={imageUrl} alt="Preview" className="w-full h-full object-cover" />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center">
-                    <ImageIcon className="w-10 h-10 text-white/30" />
-                  </div>
-                )}
-                
-                <label className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 hover:opacity-100 transition-opacity cursor-pointer">
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                  {uploading ? (
-                    <div className="animate-spin w-6 h-6 border-2 border-white/30 border-t-white rounded-full" />
-                  ) : (
-                    <Upload className="w-6 h-6" />
-                  )}
-                </label>
-              </div>
-              <p className="text-xs text-white/50 mt-2">Click to upload image</p>
-            </div>
-
-            {/* Name Input */}
-            <div>
-              <label className="block text-sm text-white/70 mb-2">Name</label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Enter instructor name"
-                className="bg-white/10 border-white/20 text-white rounded-xl"
-              />
-            </div>
-
-            {/* Actions */}
-            <div className="flex gap-3 pt-2">
-              <Button 
-                variant="outline" 
-                onClick={closeDialog}
-                className="flex-1 border-white/20 text-white hover:bg-white/10 rounded-xl"
-              >
-                Cancel
-              </Button>
-              <Button 
-                onClick={handleSave}
-                disabled={createMutation.isPending || updateMutation.isPending}
-                className="flex-1 bg-emerald-600 hover:bg-emerald-700 rounded-xl"
-              >
-                {(createMutation.isPending || updateMutation.isPending) ? 'Saving...' : 'Save'}
-              </Button>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Delete Confirmation */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent className="bg-[#1a1a1a] border-white/20 text-white">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Instructor</AlertDialogTitle>
-            <AlertDialogDescription className="text-white/60">
-              Are you sure you want to delete {instructorToDelete?.name}? This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel className="bg-white/10 border-white/20 text-white hover:bg-white/20">
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => deleteMutation.mutate(instructorToDelete?.id)}
-              className="bg-red-600 hover:bg-red-700"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Story Canvas */}
+      <StoryCanvas 
+        ref={canvasRef}
+        day={day}
+        entries={entries}
+        backgroundUrl={backgroundUrl}
+        compressed={compressed}
+      />
     </div>
   );
 }
